@@ -137,6 +137,49 @@ func (s *StorageDB) CreateFile(key, filename, ctype string, size int64, hash []b
 	})
 }
 
+// Delete file
+func (s *StorageDB) DeleteFile(key string) error {
+	ikey := fmt.Sprintf(_INFO, key)
+
+	return s.db.Update(func(txn *badger.Txn) error {
+		ival, err := txn.Get([]byte(ikey))
+		if err == badger.ErrKeyNotFound {
+			return nil
+		}
+
+		var fileInfo info
+		err = ival.Value(func(data []byte) error {
+			return json.Unmarshal(data, &fileInfo)
+		})
+		if err != nil {
+			return err
+		}
+
+		if err := txn.Delete([]byte(ikey)); err != nil {
+			return err
+		}
+
+		length := fileInfo.Length
+		if fileInfo.CurPos >= 0 { // file not completely written
+			length = fileInfo.CurPos
+		}
+
+		blocks, rest := length/BlockSize, length%BlockSize
+		if rest > 0 {
+			blocks += 1
+		}
+
+		for i := 0; i < int(blocks); i++ {
+			bkey := fmt.Sprintf(_BLOCK, key, i)
+			if err := txn.Delete([]byte(bkey)); err != nil {
+				log.Println("delete block", i, err)
+			}
+		}
+
+		return nil
+	})
+}
+
 // Add data to file
 func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 	retpos := int64(-2)
@@ -303,15 +346,15 @@ func (s *StorageDB) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 					copy(buf[p:], data)
 					nread += int64(l)
 					lbuf -= l
-                                        p += l
+					p += l
 				} else {
 					copy(buf[p:], data[:lbuf])
 					nread += int64(lbuf)
-                                        p += lbuf
+					p += lbuf
 					lbuf = 0
 				}
 
-                                return nil
+				return nil
 			})
 		}
 

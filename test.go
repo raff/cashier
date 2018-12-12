@@ -1,3 +1,4 @@
+// +build ignore
 package main
 
 import (
@@ -20,6 +21,7 @@ func main() {
 	scan := flag.Bool("scan", false, "scan current database")
 	put := flag.Bool("put", false, "upload new file")
 	get := flag.Bool("get", false, "download file")
+	del := flag.Bool("del", false, "delete file")
 	stat := flag.Bool("stat", false, "file info")
 	ppos := flag.Int64("pos", 0, "file position")
 	flag.Parse()
@@ -119,7 +121,6 @@ func main() {
 	}
 
 	if *get {
-
 		if flag.NArg() == 0 {
 			fmt.Println("usage: test -get key [file]")
 			return
@@ -170,6 +171,14 @@ func main() {
 			}
 
 			pos += n
+		}
+	}
+
+	if *del {
+		for _, key := range flag.Args() {
+			if err := sdb.DeleteFile(key); err != nil {
+				fmt.Println(key, err)
+			}
 		}
 	}
 }
