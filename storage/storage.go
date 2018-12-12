@@ -251,16 +251,16 @@ func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 }
 
 func (s *StorageDB) ReadAt(key string, buf []byte, pos int64) (int64, error) {
-	key = fmt.Sprintf(_INFO, key)
+	ikey := fmt.Sprintf(_INFO, key)
 	nread := int64(0)
 	if pos < 0 {
 		return nread, ErrInvalidPos
 	}
 
-	// block, rest := pos/BlockSize, pos%BlockSize
+	block, offs := pos/BlockSize, pos%BlockSize
 
 	return nread, s.db.View(func(txn *badger.Txn) error {
-		val, err := txn.Get([]byte(key))
+		val, err := txn.Get([]byte(ikey))
 		if err == badger.ErrKeyNotFound {
 			return err
 		}
@@ -285,6 +285,34 @@ func (s *StorageDB) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 		lbuf := len(buf)
 		if int(fileInfo.Length-pos) < lbuf {
 			lbuf = int(fileInfo.Length - pos)
+		}
+
+		for p := 0; lbuf > 0; block += 1 {
+			bkey := fmt.Sprintf(_BLOCK, key, block)
+
+			val, err := txn.Get([]byte(bkey))
+			if err == badger.ErrKeyNotFound {
+				return err
+			}
+
+			val.Value(func(data []byte) error {
+				data, offs = data[offs:], 0
+				l := len(data)
+
+				if lbuf > l {
+					copy(buf[p:], data)
+					nread += int64(l)
+					lbuf -= l
+                                        p += l
+				} else {
+					copy(buf[p:], data[:lbuf])
+					nread += int64(lbuf)
+                                        p += lbuf
+					lbuf = 0
+				}
+
+                                return nil
+			})
 		}
 
 		return nil

@@ -119,20 +119,26 @@ func main() {
 	}
 
 	if *get {
-		var key, fpath string
+
+		if flag.NArg() == 0 {
+			fmt.Println("usage: test -get key [file]")
+			return
+		}
+
+		key := flag.Arg(0)
+		var fpath string
+
+		stat, err := sdb.Stat(key)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
 
 		switch flag.NArg() {
 		case 1:
-			key = flag.Arg(0)
-			stat, err := sdb.Stat(key)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
 			fpath = stat.Name
 
 		case 2:
-			key = flag.Arg(0)
 			fpath = flag.Arg(1)
 
 		default:
@@ -140,12 +146,30 @@ func main() {
 			return
 		}
 
-		f, err := os.OpenFile(fpath, os.O_CREATE|os.O_EXCL, 0666)
+		f, err := os.OpenFile(fpath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0666)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
 
 		defer f.Close()
+
+		var buf = make([]byte, 4*storage.BlockSize)
+		var pos int64
+
+		for pos < stat.Length {
+			n, err := sdb.ReadAt(key, buf, pos)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			if _, err = f.Write(buf[:n]); err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			pos += n
+		}
 	}
 }
