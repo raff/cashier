@@ -108,7 +108,7 @@ func main() {
 				return
 			}
 
-			npos, err := sdb.WriteData(key, pos, buf[:n])
+			npos, err := sdb.WriteAt(key, pos, buf[:n])
 			if err != nil {
 				fmt.Println(err)
 				return

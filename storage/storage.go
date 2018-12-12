@@ -138,7 +138,7 @@ func (s *StorageDB) CreateFile(key, filename, ctype string, size int64, hash []b
 }
 
 // Add data to file
-func (s *StorageDB) WriteData(key string, pos int64, data []byte) (int64, error) {
+func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 	retpos := int64(-2)
 	if pos < 0 {
 		return retpos, ErrInvalidPos
@@ -250,14 +250,14 @@ func (s *StorageDB) WriteData(key string, pos int64, data []byte) (int64, error)
 	})
 }
 
-func (s *StorageDB) ReadAt(buf []byte, pos int64) (int64, error) {
+func (s *StorageDB) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 	key = fmt.Sprintf(_INFO, key)
 	nread := int64(0)
 	if pos < 0 {
 		return nread, ErrInvalidPos
 	}
 
-	block, rest := pos/BlockSize, pos%BlockSize
+	// block, rest := pos/BlockSize, pos%BlockSize
 
 	return nread, s.db.View(func(txn *badger.Txn) error {
 		val, err := txn.Get([]byte(key))
