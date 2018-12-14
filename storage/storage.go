@@ -26,7 +26,8 @@ const (
 )
 
 var (
-	ErrFileExists  = fmt.Errorf("File exists")
+	ErrExists      = fmt.Errorf("File exists")
+	ErrNotFound    = fmt.Errorf("File not found")
 	ErrInvalidSize = fmt.Errorf("Invalid Size")
 	ErrInvalidPos  = fmt.Errorf("Invalid Position")
 	ErrInvalidHash = fmt.Errorf("Invalid Hash")
@@ -122,7 +123,7 @@ func (s *StorageDB) CreateFile(key, filename, ctype string, size int64, hash []b
 	return s.db.Update(func(txn *badger.Txn) error {
 		_, err := txn.Get([]byte(key))
 		if err == nil {
-			return ErrFileExists
+			return ErrExists
 		}
 		if err != badger.ErrKeyNotFound {
 			return err
@@ -198,7 +199,7 @@ func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 	return retpos, s.db.Update(func(txn *badger.Txn) error {
 		ival, err := txn.Get([]byte(ikey))
 		if err == badger.ErrKeyNotFound {
-			return err
+			return ErrNotFound
 		}
 
 		var fileInfo info
@@ -212,7 +213,7 @@ func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 		//log.Println(fileInfo, "start", startBlock, "blocks", nblocks, "rest", rest, "pos", pos)
 
 		if fileInfo.CurPos < 0 { // file complete
-			return ErrFileExists
+			return ErrExists
 		}
 
 		if pos != fileInfo.CurPos { // wrong start
@@ -266,7 +267,9 @@ func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 
 		hh := curHash.Sum(nil)
 		if fileInfo.CurPos+offs == fileInfo.Length { // we are done
-			if fileInfo.Hash != toHex(hh) {
+			if fileInfo.Hash == "" {
+				fileInfo.Hash = toHex(hh)
+			} else if fileInfo.Hash != toHex(hh) {
 				// delete file ?
 				return ErrInvalidHash
 			}
@@ -305,7 +308,7 @@ func (s *StorageDB) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 	return nread, s.db.View(func(txn *badger.Txn) error {
 		val, err := txn.Get([]byte(ikey))
 		if err == badger.ErrKeyNotFound {
-			return err
+			return ErrNotFound
 		}
 
 		var fileInfo info
@@ -335,7 +338,7 @@ func (s *StorageDB) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 
 			val, err := txn.Get([]byte(bkey))
 			if err == badger.ErrKeyNotFound {
-				return err
+				return ErrNotFound
 			}
 
 			val.Value(func(data []byte) error {
@@ -371,7 +374,7 @@ func (s *StorageDB) Stat(key string) (*FileInfo, error) {
 	return stats, s.db.View(func(txn *badger.Txn) error {
 		val, err := txn.Get([]byte(key))
 		if err == badger.ErrKeyNotFound {
-			return err
+			return ErrNotFound
 		}
 
 		var fileInfo info
