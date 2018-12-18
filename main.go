@@ -131,15 +131,15 @@ func main() {
 	// Routes
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "OK")
-	})
+	}).Name = "Ping"
 
 	e.GET("/routes", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, e.Routes())
-	})
+	}).Name = "Routes"
 
-	e.GET("/x/:id", cashier.getEntry)
-	e.POST("/x/:id", cashier.putEntry)
-	e.DELETE("/x/:id", cashier.deleteEntry)
+	e.GET("/x/:id", cashier.getEntry).Name = "Get"
+	e.POST("/x/:id", cashier.putEntry).Name = "Create"
+	e.DELETE("/x/:id", cashier.deleteEntry).Name = "Delete"
 
 	// Start server
 	e.Logger.Fatal(e.Start(":1999"))
