@@ -18,6 +18,7 @@ func main() {
 	path := flag.String("path", "storage.data", "path to data folder")
 	ttl := flag.Duration("ttl", 10*time.Minute, "time to live")
 	gc := flag.Bool("gc", false, "run value-log gc")
+	rdonly := flag.Bool("read", false, "open read-only")
 	scan := flag.Bool("scan", false, "scan current database")
 	put := flag.Bool("put", false, "upload new file")
 	get := flag.Bool("get", false, "download file")
@@ -26,7 +27,7 @@ func main() {
 	ppos := flag.Int64("pos", 0, "file position")
 	flag.Parse()
 
-	sdb, err := storage.Open(*path, *ttl)
+	sdb, err := storage.Open(*path, *rdonly, *ttl)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -154,6 +155,8 @@ func main() {
 		}
 
 		defer f.Close()
+
+		fmt.Println("Get", fpath)
 
 		var buf = make([]byte, 4*storage.BlockSize)
 		var pos int64

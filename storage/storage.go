@@ -41,10 +41,12 @@ type StorageDB struct {
 }
 
 // Open data folder and return instance of storage service
-func Open(dataFolder string, ttl time.Duration) (*StorageDB, error) {
+func Open(dataFolder string, readonly bool, ttl time.Duration) (*StorageDB, error) {
 	opts := badger.DefaultOptions
 	opts.Dir = dataFolder
 	opts.ValueDir = dataFolder
+	opts.ReadOnly = readonly
+	opts.Truncate = true
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, err
@@ -69,6 +71,7 @@ type FileInfo struct {
 	Hash        string
 	Length      int64
 	Next        int64
+	ExpiresAt   uint64
 }
 
 // Close storage service
@@ -392,6 +395,7 @@ func (s *StorageDB) Stat(key string) (*FileInfo, error) {
 			Hash:        fileInfo.Hash,
 			Length:      fileInfo.Length,
 			Next:        fileInfo.CurPos,
+			ExpiresAt:   val.ExpiresAt(),
 		}
 
 		return nil
@@ -408,8 +412,12 @@ func (s *StorageDB) Scan(start string) error {
 
 		for it.Seek(key); it.Valid(); it.Next() {
 			item := it.Item()
-			log.Println(string(item.Key()), item.EstimatedSize(),
-				time.Unix(int64(item.ExpiresAt()), 0), item.IsDeletedOrExpired())
+			if item.ExpiresAt() == 0 {
+				log.Println(string(item.Key()), item.EstimatedSize())
+			} else {
+				log.Println(string(item.Key()), item.EstimatedSize(),
+					time.Unix(int64(item.ExpiresAt()), 0), item.IsDeletedOrExpired())
+			}
 		}
 
 		return nil

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/labstack/echo"
@@ -90,7 +93,7 @@ func (cc *Cashier) putEntry(c echo.Context) error {
 	}
 
 	if nread != size {
-		log.Println("expected", size, "read", nread)
+		c.Logger().Error("expected", size, "read", nread)
 	}
 
 	return c.String(http.StatusCreated, "CREATED")
@@ -112,7 +115,7 @@ func main() {
 
 	flag.Parse()
 
-	sdb, err := storage.Open(*path, *ttl)
+	sdb, err := storage.Open(*path, false, *ttl)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -141,6 +144,22 @@ func main() {
 	e.POST("/x/:id", cashier.putEntry).Name = "Create"
 	e.DELETE("/x/:id", cashier.deleteEntry).Name = "Delete"
 
-	// Start server
-	e.Logger.Fatal(e.Start(":1999"))
+	go func() {
+		// Start server
+		if err := e.Start(":1999"); err != nil {
+			e.Logger.Warn("Server didn't start")
+		}
+	}()
+
+	quit := make(chan os.Signal)
+	signal.Notify(quit, os.Interrupt)
+
+	<-quit
+	log.Println("Shutting down...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := e.Shutdown(ctx); err != nil {
+		e.Logger.Fatal(err)
+	}
 }
