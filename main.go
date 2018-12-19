@@ -203,6 +203,7 @@ func main() {
 	e.POST("/x/:id", cashier.putEntry).Name = "Create"
 	e.DELETE("/x/:id", cashier.deleteEntry).Name = "Delete"
 	e.GET("/x/:id", cashier.getEntry).Name = "Get"
+	e.HEAD("/x/:id", cashier.getEntry).Name = "Head"
 	e.GET("/x/:id/meta", cashier.getMetadata).Name = "Get Metadata"
 
 	go func() {
