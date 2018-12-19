@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"io"
 	"log"
@@ -17,19 +18,6 @@ import (
 
 type Cashier struct {
 	sdb *storage.StorageDB
-}
-
-func (cc *Cashier) getEntry(c echo.Context) error {
-	id := c.Param("id")
-	info, err := cc.sdb.Stat(id)
-	if err == storage.ErrNotFound {
-		return c.String(http.StatusNotFound, "NOT FOUND")
-	}
-	if err != nil {
-		return c.String(http.StatusInternalServerError, err.Error())
-	}
-
-	return c.JSON(http.StatusOK, info)
 }
 
 func (cc *Cashier) putEntry(c echo.Context) error {
@@ -108,6 +96,78 @@ func (cc *Cashier) deleteEntry(c echo.Context) error {
 	return c.String(http.StatusNoContent, "DELETED")
 }
 
+func (cc *Cashier) getMetadata(c echo.Context) error {
+	id := c.Param("id")
+	info, err := cc.sdb.Stat(id)
+	if err == storage.ErrNotFound {
+		return c.String(http.StatusNotFound, "NOT FOUND")
+	}
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, info)
+}
+
+type ReadSeeker struct {
+	sdb    *storage.StorageDB
+	key    string
+	pos    int64
+	length int64
+}
+
+func (rs *ReadSeeker) Read(p []byte) (int, error) {
+	n, err := rs.sdb.ReadAt(rs.key, p, rs.pos)
+	rs.pos += n
+	return int(n), err
+}
+
+var errWhence = errors.New("Seek: invalid whence")
+var errOffset = errors.New("Seek: invalid offset")
+
+func (rs *ReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	default:
+		return 0, errWhence
+
+	case io.SeekStart:
+		// offset is already correct
+		break
+
+	case io.SeekCurrent:
+		offset += rs.pos
+
+	case io.SeekEnd:
+		offset = rs.length + offset
+	}
+
+	if offset < 0 {
+		return 0, errOffset
+	}
+
+	rs.pos = offset
+	return offset, nil
+}
+
+func (cc *Cashier) getEntry(c echo.Context) error {
+	id := c.Param("id")
+	info, err := cc.sdb.Stat(id)
+	if err == storage.ErrNotFound {
+		return c.String(http.StatusNotFound, "NOT FOUND")
+	}
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	if info.ContentType != "" {
+		c.Response().Header().Set("Content-Type", info.ContentType)
+
+	}
+
+	http.ServeContent(c.Response(), c.Request(), info.Name, info.Created, &ReadSeeker{sdb: cc.sdb, key: id, pos: 0, length: info.Length})
+	return nil
+}
+
 func main() {
 	path := flag.String("path", "storage.data", "path to data folder")
 	ttl := flag.Duration("ttl", 10*time.Minute, "time to live")
@@ -140,9 +200,10 @@ func main() {
 		return c.JSON(http.StatusOK, e.Routes())
 	}).Name = "Routes"
 
-	e.GET("/x/:id", cashier.getEntry).Name = "Get"
 	e.POST("/x/:id", cashier.putEntry).Name = "Create"
 	e.DELETE("/x/:id", cashier.deleteEntry).Name = "Delete"
+	e.GET("/x/:id", cashier.getEntry).Name = "Get"
+	e.GET("/x/:id/meta", cashier.getMetadata).Name = "Get Metadata"
 
 	go func() {
 		// Start server

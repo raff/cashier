@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	BlockSize    = 16 * 1024
-	FileComplete = -1
+	BlockSize          = 16 * 1024
+	FileComplete int64 = -1
+	InvalidPos   int64 = -2
 
 	_INFO  = "%v:i"
 	_BLOCK = "%v:%d"
@@ -56,12 +57,13 @@ func Open(dataFolder string, readonly bool, ttl time.Duration) (*StorageDB, erro
 }
 
 type info struct {
-	Name        string `json:"n"` // original file name
-	ContentType string `json:"c"` //
-	Hash        string `json:"h"` // original file hash
-	Length      int64  `json:"l"` // original file size
-	CurPos      int64  `json:"p"` // current offset in file
-	CurHash     string `json:"x"` // current hash
+	Name        string    `json:"n"` // original file name
+	ContentType string    `json:"c"` //
+	Hash        string    `json:"h"` // original file hash
+	Length      int64     `json:"l"` // original file size
+	Created     time.Time `json:"t"` // creation time (time of completion)
+	CurPos      int64     `json:"p"` // current offset in file
+	CurHash     string    `json:"x"` // current hash
 }
 
 // User file info, returned by Stat
@@ -71,7 +73,8 @@ type FileInfo struct {
 	Hash        string
 	Length      int64
 	Next        int64
-	ExpiresAt   uint64
+	Created     time.Time
+	ExpiresAt   time.Time
 }
 
 // Close storage service
@@ -186,9 +189,8 @@ func (s *StorageDB) DeleteFile(key string) error {
 
 // Add data to file
 func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
-	retpos := int64(-2)
 	if pos < 0 {
-		return retpos, ErrInvalidPos
+		return InvalidPos, ErrInvalidPos
 	}
 
 	ikey := fmt.Sprintf(_INFO, key)
@@ -196,10 +198,12 @@ func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 	startBlock, rr := int(pos/BlockSize), int(pos%BlockSize)
 	if rr != 0 {
 		log.Println(key, "pos", pos, "block", startBlock, "rest", rr)
-		return retpos, ErrInvalidPos
+		return InvalidPos, ErrInvalidPos
 	}
 
-	return retpos, s.db.Update(func(txn *badger.Txn) error {
+	retpos := InvalidPos
+
+	err := s.db.Update(func(txn *badger.Txn) error {
 		ival, err := txn.Get([]byte(ikey))
 		if err == badger.ErrKeyNotFound {
 			return ErrNotFound
@@ -290,6 +294,8 @@ func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 			retpos = fileInfo.CurPos
 		}
 
+		fileInfo.Created = time.Now()
+
 		buf, _ := json.Marshal(fileInfo)
 		if err := txn.SetWithTTL([]byte(ikey), buf, s.ttl); err != nil {
 			return err
@@ -297,18 +303,20 @@ func (s *StorageDB) WriteAt(key string, pos int64, data []byte) (int64, error) {
 
 		return nil
 	})
+
+	return retpos, err
 }
 
 func (s *StorageDB) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 	ikey := fmt.Sprintf(_INFO, key)
-	nread := int64(0)
 	if pos < 0 {
-		return nread, ErrInvalidPos
+		return 0, ErrInvalidPos
 	}
 
 	block, offs := pos/BlockSize, pos%BlockSize
+	nread := int64(0)
 
-	return nread, s.db.View(func(txn *badger.Txn) error {
+	err := s.db.View(func(txn *badger.Txn) error {
 		val, err := txn.Get([]byte(ikey))
 		if err == badger.ErrKeyNotFound {
 			return ErrNotFound
@@ -366,6 +374,8 @@ func (s *StorageDB) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 
 		return nil
 	})
+
+	return nread, err
 }
 
 // Return file info
@@ -392,10 +402,11 @@ func (s *StorageDB) Stat(key string) (*FileInfo, error) {
 		stats = &FileInfo{
 			Name:        fileInfo.Name,
 			ContentType: fileInfo.ContentType,
+			Created:     fileInfo.Created,
 			Hash:        fileInfo.Hash,
 			Length:      fileInfo.Length,
 			Next:        fileInfo.CurPos,
-			ExpiresAt:   val.ExpiresAt(),
+			ExpiresAt:   time.Unix(int64(val.ExpiresAt()), 0),
 		}
 
 		return nil
