@@ -111,6 +111,8 @@ func main() {
 				return
 			}
 
+			// fmt.Println(key, sz, pos)
+
 			npos, err := sdb.WriteAt(key, pos, buf[:n])
 			if err != nil {
 				fmt.Println(err)

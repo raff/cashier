@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 
 	"github.com/labstack/echo"
@@ -119,6 +120,11 @@ type ReadSeeker struct {
 func (rs *ReadSeeker) Read(p []byte) (int, error) {
 	n, err := rs.sdb.ReadAt(rs.key, p, rs.pos)
 	rs.pos += n
+
+	if err != nil {
+		log.Println("Read", rs.key, rs.pos, err)
+	}
+
 	return int(n), err
 }
 
@@ -162,6 +168,16 @@ func (cc *Cashier) getEntry(c echo.Context) error {
 	if info.ContentType != "" {
 		c.Response().Header().Set("Content-Type", info.ContentType)
 
+	}
+
+	if info.Next != storage.FileComplete {
+		c.Response().Header().Set("X-Current-Length", strconv.Itoa(int(info.Next)))
+		c.Response().Header().Set("X-Total-Length", strconv.Itoa(int(info.Length)))
+		return c.String(http.StatusForbidden, "INCOMPLETE")
+	}
+
+	if info.Hash != "" {
+		c.Response().Header().Set("ETag", strconv.Quote(info.Hash))
 	}
 
 	http.ServeContent(c.Response(), c.Request(), info.Name, info.Created, &ReadSeeker{sdb: cc.sdb, key: id, pos: 0, length: info.Length})
