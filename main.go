@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -21,8 +22,55 @@ type Cashier struct {
 	sdb *storage.StorageDB
 }
 
+type mmap = map[string]interface{}
+
+func errorMessage(code, subcode interface{}, info mmap) mmap {
+	message := mmap{"code": code, "subcode": subcode}
+
+	for k, v := range info {
+		message[k] = v
+	}
+
+	return message
+}
+
 func (cc *Cashier) putEntry(c echo.Context) error {
 	id := c.Param("id")
+	resumePos := int64(0)
+
+	info, err := cc.sdb.Stat(id)
+	if err == nil { // already exists
+		if srange := c.Request().Header.Get("Content-Range"); srange != "" {
+			var start, stop, length int64
+			if _, err := fmt.Sscanf(srange, "bytes %d-%d/%d", &start, &stop, &length); err != nil {
+				return c.String(http.StatusInternalServerError, err.Error())
+			}
+
+			if start != info.Next || length != info.Length {
+				c.Logger().Debugf("upload %v: range %v-%v/%v next %v/%v",
+					id, start, stop, length, info.Next, info.Length)
+				return c.String(http.StatusBadRequest, "invalid-range")
+			}
+			if stop < length-1 && (stop-start+1)%storage.BlockSize != 0 {
+				c.Logger().Debugf("upload %v: range %v-%v/%v next %v/%v",
+					id, start, stop, length, info.Next, info.Length)
+				return c.String(http.StatusBadRequest, "invalid-range")
+			}
+
+			resumePos = start
+			c.Logger().Debugf("upload %v: resume from %v", id, resumePos)
+		} else if info.Next != storage.FileComplete {
+			c.Response().Header().Set("Range",
+				fmt.Sprintf("bytes=%v-%v/%v", info.Next, info.Length-1, info.Length))
+			return c.JSON(http.StatusConflict, errorMessage("conflict", "incomplete", mmap{
+				"resume-from": info.Next,
+			}))
+		} else {
+			return c.JSON(http.StatusConflict, errorMessage("conflict", "already-exists", nil))
+		}
+	} else if err != storage.ErrNotFound {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
 
 	var reader io.Reader
 	var size int64
@@ -36,27 +84,37 @@ func (cc *Cashier) putEntry(c echo.Context) error {
 
 		defer ffile.Close()
 
-		err = cc.sdb.CreateFile(id, finfo.Filename, finfo.Header.Get("Content-Type"), finfo.Size, nil)
+		if resumePos == 0 {
+			err = cc.sdb.CreateFile(id, finfo.Filename, finfo.Header.Get("Content-Type"), finfo.Size, nil)
+			c.Logger().Debugf("upload %v: created", id)
+		}
 		reader = ffile
 		size = finfo.Size
 	} else if err == http.ErrNotMultipart {
+		err = nil
+
 		// not a form, we just read the body
-		err = cc.sdb.CreateFile(id, id, c.Request().Header.Get("Content-Type"), c.Request().ContentLength, nil)
+		if resumePos == 0 {
+			err = cc.sdb.CreateFile(id, id, c.Request().Header.Get("Content-Type"), c.Request().ContentLength, nil)
+			c.Logger().Debugf("upload %v: created", id)
+		}
 		reader = c.Request().Body
 		size = c.Request().ContentLength
 	}
-
 	if err == storage.ErrExists {
-		return c.JSON(http.StatusConflict, "ALREADY EXISTS")
+		c.Logger().Errorf("upload %v: %v", id, err.Error())
+		return c.String(http.StatusConflict, "ALREADY EXISTS")
 	}
 	if err != nil {
+		c.Logger().Errorf("upload %v: %v", id, err.Error())
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 
 	var buf = make([]byte, storage.BlockSize)
+	var pos int64
 	var nread int64
 
-	for pos := int64(0); pos != storage.FileComplete; {
+	for pos = resumePos; pos != storage.FileComplete; {
 		var n int
 
 		n, err = reader.Read(buf)
@@ -65,24 +123,28 @@ func (cc *Cashier) putEntry(c echo.Context) error {
 				break
 			}
 		} else if err != nil {
+			c.Logger().Warnf("upload %v: error reading %v", id, err)
 			break
 		}
+
+		c.Logger().Debugf("upload %v: read %v", id, n)
 
 		npos, err := cc.sdb.WriteAt(id, pos, buf[:n])
 		if err != nil {
+			c.Logger().Warnf("upload %v: error writing %v", id, err)
 			break
 		}
 
+		c.Logger().Debugf("upload %v: wrote %v, next %v", id, n, npos)
 		nread += int64(n)
 		pos = npos
 	}
-
-	if err != nil {
-		return c.String(http.StatusInternalServerError, err.Error())
-	}
-
 	if nread != size {
-		c.Logger().Error("expected", size, "read", nread)
+		c.Logger().Errorf("upload %v: expected %v read %v writepos %v", id, size, nread, pos)
+	}
+	if err != nil {
+		c.Logger().Errorf("upload %v: %v", id, err.Error())
+		return c.String(http.StatusInternalServerError, err.Error())
 	}
 
 	return c.String(http.StatusCreated, "CREATED")
@@ -187,6 +249,7 @@ func (cc *Cashier) getEntry(c echo.Context) error {
 func main() {
 	path := flag.String("path", "storage.data", "path to data folder")
 	ttl := flag.Duration("ttl", 10*time.Minute, "time to live")
+	debug := flag.Bool("debug", false, "debug logging")
 	//gc := flag.Bool("gc", false, "run value-log gc")
 
 	flag.Parse()
@@ -200,6 +263,7 @@ func main() {
 
 	// Echo instance
 	e := echo.New()
+	e.Debug = *debug
 	cashier := &Cashier{sdb: sdb}
 
 	// Middleware
@@ -224,8 +288,8 @@ func main() {
 
 	go func() {
 		// Start server
-		if err := e.Start(":1999"); err != nil {
-			e.Logger.Warn("Server didn't start")
+		if err := e.Start(":1999"); err != nil && err != http.ErrServerClosed {
+			e.Logger.Error("Server didn't start - ", err)
 		}
 	}()
 
