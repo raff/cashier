@@ -22,6 +22,7 @@ func main() {
 	scan := flag.Bool("scan", false, "scan current database")
 	put := flag.Bool("put", false, "upload new file")
 	get := flag.Bool("get", false, "download file")
+	cat := flag.Bool("cat", false, "download file to stdout")
 	del := flag.Bool("del", false, "delete file")
 	stat := flag.Bool("stat", false, "file info")
 	ppos := flag.Int64("pos", 0, "file position")
@@ -123,14 +124,19 @@ func main() {
 		}
 	}
 
-	if *get {
+	if *get || *cat {
 		if flag.NArg() == 0 {
-			fmt.Println("usage: test -get key [file]")
+			if *cat {
+				fmt.Println("usage: test -cat key")
+			} else {
+				fmt.Println("usage: test -get key [file]")
+			}
 			return
 		}
 
 		key := flag.Arg(0)
 		var fpath string
+		var writer io.Writer
 
 		stat, err := sdb.Stat(key)
 		if err != nil {
@@ -138,25 +144,30 @@ func main() {
 			return
 		}
 
-		switch flag.NArg() {
-		case 1:
-			fpath = stat.Name
+		if *get {
+			switch flag.NArg() {
+			case 1:
+				fpath = stat.Name
 
-		case 2:
-			fpath = flag.Arg(1)
+			case 2:
+				fpath = flag.Arg(1)
 
-		default:
-			fmt.Println("usage: test -get key [file]")
-			return
+			default:
+				fmt.Println("usage: test -get key [file]")
+				return
+			}
+
+			f, err := os.OpenFile(fpath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0666)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			defer f.Close()
+			writer = f
+		} else {
+			writer = os.Stdout
 		}
-
-		f, err := os.OpenFile(fpath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0666)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		defer f.Close()
 
 		fmt.Println("Get", fpath)
 
@@ -170,7 +181,7 @@ func main() {
 				return
 			}
 
-			if _, err = f.Write(buf[:n]); err != nil {
+			if _, err = writer.Write(buf[:n]); err != nil {
 				fmt.Println(err)
 				return
 			}
