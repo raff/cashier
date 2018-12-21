@@ -424,9 +424,10 @@ func (s *StorageDB) Scan(start string) error {
 		for it.Seek(key); it.Valid(); it.Next() {
 			item := it.Item()
 			if item.ExpiresAt() == 0 {
-				log.Println(string(item.Key()), item.EstimatedSize())
+				log.Printf("%v: size=%v", string(item.Key()), item.EstimatedSize())
 			} else {
-				log.Println(string(item.Key()), item.EstimatedSize(),
+				log.Printf("%v: size=%v exprires=%v deleted=%v",
+					string(item.Key()), item.EstimatedSize(),
 					time.Unix(int64(item.ExpiresAt()), 0), item.IsDeletedOrExpired())
 			}
 		}
