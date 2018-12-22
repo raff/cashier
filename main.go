@@ -219,7 +219,7 @@ func (cc *Cashier) updateEntry(c echo.Context) error {
 	for pos = start; pos != storage.FileComplete; {
 		var n int
 
-		n, err = reader.Read(buf)
+		n, err = io.ReadAtLeast(reader, buf, storage.BlockSize)
 		if err == io.EOF {
 			if n == 0 {
 				break
