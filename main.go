@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"time"
 
 	"github.com/labstack/echo"
@@ -24,7 +24,7 @@ type Cashier struct {
 
 type mmap = map[string]interface{}
 
-func errorMessage(code, subcode interface{}, info mmap) mmap {
+func statusMessage(code, subcode interface{}, info mmap) mmap {
 	message := mmap{"code": code, "subcode": subcode}
 
 	for k, v := range info {
@@ -34,87 +34,189 @@ func errorMessage(code, subcode interface{}, info mmap) mmap {
 	return message
 }
 
-func (cc *Cashier) putEntry(c echo.Context) error {
+func (cc *Cashier) createEntry(c echo.Context) error {
 	id := c.Param("id")
-	resumePos := int64(0)
 
-	info, err := cc.sdb.Stat(id)
-	if err == nil { // already exists
-		if srange := c.Request().Header.Get("Content-Range"); srange != "" {
-			var start, stop, length int64
-			if _, err := fmt.Sscanf(srange, "bytes %d-%d/%d", &start, &stop, &length); err != nil {
-				return c.String(http.StatusInternalServerError, err.Error())
-			}
-
-			if start != info.Next || length != info.Length {
-				c.Logger().Debugf("upload %v: range %v-%v/%v next %v/%v",
-					id, start, stop, length, info.Next, info.Length)
-				return c.String(http.StatusBadRequest, "invalid-range")
-			}
-			if stop < length-1 && (stop-start+1)%storage.BlockSize != 0 {
-				c.Logger().Debugf("upload %v: range %v-%v/%v next %v/%v",
-					id, start, stop, length, info.Next, info.Length)
-				return c.String(http.StatusBadRequest, "invalid-range")
-			}
-
-			resumePos = start
-			c.Logger().Debugf("upload %v: resume from %v", id, resumePos)
-		} else if info.Next != storage.FileComplete {
-			c.Response().Header().Set("Range",
-				fmt.Sprintf("bytes=%v-%v/%v", info.Next, info.Length-1, info.Length))
-			return c.JSON(http.StatusConflict, errorMessage("conflict", "incomplete", mmap{
-				"resume-from": info.Next,
-			}))
-		} else {
-			return c.JSON(http.StatusConflict, errorMessage("conflict", "already-exists", nil))
-		}
-	} else if err != storage.ErrNotFound {
-		return c.String(http.StatusInternalServerError, err.Error())
-	}
+	log.Println("create", id)
 
 	var reader io.Reader
-	var size int64
 
-	finfo, err := c.FormFile("file")
-	if err == nil {
-		ffile, ferr := finfo.Open()
-		if ferr != nil {
-			return c.String(http.StatusInternalServerError, err.Error())
-		}
+	size := int64(-1)
 
-		defer ffile.Close()
+	if c.Request().Header.Get("X-File-Length") != "" {
+		fmt.Sscanf(c.Request().Header.Get("X-File-Length"), "%d", &size)
+	}
 
-		if resumePos == 0 {
-			err = cc.sdb.CreateFile(id, finfo.Filename, finfo.Header.Get("Content-Type"), finfo.Size, nil)
-			c.Logger().Debugf("upload %v: created", id)
-		}
-		reader = ffile
-		size = finfo.Size
-	} else if err == http.ErrNotMultipart {
+	mp, err := c.Request().MultipartReader()
+	if err == http.ErrNotMultipart {
 		err = nil
 
-		// not a form, we just read the body
-		if resumePos == 0 {
-			err = cc.sdb.CreateFile(id, id, c.Request().Header.Get("Content-Type"), c.Request().ContentLength, nil)
-			c.Logger().Debugf("upload %v: created", id)
+		fname := id
+		cdisp := c.Request().Header.Get("Content-Disposition")
+		if cdisp != "" {
+			_, params, _ := mime.ParseMediaType(cdisp)
+			if _, ok := params["filename"]; ok {
+				fname = params["filename"]
+			}
 		}
+
+		if size < 0 {
+			size = c.Request().ContentLength
+		}
+
+		// not a form, we just read the body
+		err = cc.sdb.CreateFile(id, fname, c.Request().Header.Get("Content-Type"), size, nil)
 		reader = c.Request().Body
-		size = c.Request().ContentLength
+	} else if err == nil {
+		fname := id
+		ftype := ""
+
+		for {
+			p, err := mp.NextPart()
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, statusMessage("error", err.Error(), nil))
+			}
+
+			if p.FormName() == "file" { // file to upload
+				if p.FileName() != "" {
+					fname = p.FileName()
+				}
+
+				reader = p
+				ftype = p.Header.Get("Content-Type")
+
+				if p.Header.Get("Content-Length") != "" {
+					fmt.Sscanf(p.Header.Get("Content-File-Length"), "%d", &size)
+				}
+
+				// this seems to casue the server to read the full request
+				// before returning an error
+				// defer p.Close()
+				break
+			}
+		}
+
+		if reader == nil {
+			return c.JSON(http.StatusBadRequest, statusMessage("missing", "missing-file", nil))
+		}
+		if size < 0 {
+			return c.JSON(http.StatusBadRequest, statusMessage("missing", "missing-file-length", nil))
+		}
+
+		err = cc.sdb.CreateFile(id, fname, ftype, size, nil)
+	} else {
+		log.Printf("upload %v: cannot get form data - %v", id, err)
 	}
+
 	if err == storage.ErrExists {
-		c.Logger().Errorf("upload %v: %v", id, err.Error())
-		return c.String(http.StatusConflict, "ALREADY EXISTS")
+		log.Printf("upload %v: exists", id)
+
+		info, _ := cc.sdb.Stat(id)
+		if info != nil && info.Next != storage.FileComplete {
+			c.Response().Header().Set("Range",
+				fmt.Sprintf("bytes=%v-%v/%v", info.Next, info.Length-1, info.Length))
+		}
+		return c.JSON(http.StatusConflict, statusMessage("conflict", "file-exists", nil))
 	}
 	if err != nil {
-		c.Logger().Errorf("upload %v: %v", id, err.Error())
-		return c.String(http.StatusInternalServerError, err.Error())
+		log.Printf("upload %v: %v", id, err.Error())
+		return c.JSON(http.StatusInternalServerError, statusMessage("error", err.Error(), nil))
 	}
+
+	log.Printf("upload %v: created", id)
 
 	var buf = make([]byte, storage.BlockSize)
 	var pos int64
 	var nread int64
 
-	for pos = resumePos; pos != storage.FileComplete; {
+	for pos != storage.FileComplete {
+		var n int
+
+		n, err = io.ReadAtLeast(reader, buf, storage.BlockSize)
+		if err == io.EOF {
+			if n == 0 {
+				break
+			}
+		} else if err != nil {
+			log.Printf("upload %v: error reading - %v", id, err)
+			break
+		}
+
+		log.Printf("upload %v: read %v", id, n)
+
+		npos, err := cc.sdb.WriteAt(id, pos, buf[:n])
+		if err != nil {
+			log.Printf("upload %v: error writing - %v", id, err)
+			break
+		}
+
+		log.Printf("upload %v: wrote %v, next %v", id, n, npos)
+		nread += int64(n)
+		pos = npos
+	}
+	if nread != size {
+		log.Printf("upload %v: expected %v read %v writepos %v", id, size, nread, pos)
+	}
+	if err != nil {
+		log.Printf("upload %v: %v", id, err.Error())
+		return c.JSON(http.StatusInternalServerError, statusMessage("error", err.Error(), nil))
+	}
+
+	return c.JSON(http.StatusCreated, statusMessage("success", "created", nil))
+}
+
+func (cc *Cashier) updateEntry(c echo.Context) error {
+	id := c.Param("id")
+
+	info, err := cc.sdb.Stat(id)
+	if err == storage.ErrNotFound {
+		return c.JSON(http.StatusNotFound, statusMessage("missing", "not-found", nil))
+	}
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, statusMessage("error", err.Error(), nil))
+	}
+	if info.Next == storage.FileComplete {
+		return c.JSON(http.StatusConflict, statusMessage("conflict", "complete", nil))
+	}
+
+	srange := c.Request().Header.Get("Content-Range")
+	if srange == "" {
+		c.Response().Header().Set("Range",
+			fmt.Sprintf("bytes=%v-%v/%v", info.Next, info.Length-1, info.Length))
+		return c.JSON(http.StatusBadRequest, statusMessage("missing", "range-expected", nil))
+	}
+
+	var start, stop, length int64
+	if _, err := fmt.Sscanf(srange, "bytes %d-%d/%d", &start, &stop, &length); err != nil {
+		c.Response().Header().Set("Range",
+			fmt.Sprintf("bytes=%v-%v/%v", info.Next, info.Length-1, info.Length))
+		return c.JSON(http.StatusBadRequest, statusMessage("invalid", "invalid-range", nil))
+	}
+	if start != info.Next || length != info.Length {
+		log.Printf("upload %v: range %v-%v/%v next %v/%v",
+			id, start, stop, length, info.Next, info.Length)
+		c.Response().Header().Set("Range",
+			fmt.Sprintf("bytes=%v-%v/%v", info.Next, info.Length-1, info.Length))
+		return c.JSON(http.StatusBadRequest, statusMessage("invalid", "invalid-range", nil))
+	}
+	if stop < length-1 && (stop-start+1)%storage.BlockSize != 0 {
+		log.Printf("upload %v: range %v-%v/%v next %v/%v",
+			id, start, stop, length, info.Next, info.Length)
+		c.Response().Header().Set("Range",
+			fmt.Sprintf("bytes=%v-%v/%v", info.Next, info.Length-1, info.Length))
+		return c.JSON(http.StatusBadRequest, statusMessage("invalid", "invalid-range", nil))
+	}
+
+	log.Printf("upload %v: resume from %v", id, start)
+
+	reader := c.Request().Body
+	size := c.Request().ContentLength
+
+	buf := make([]byte, storage.BlockSize)
+	pos := int64(0)
+	nread := int64(0)
+
+	for pos = start; pos != storage.FileComplete; {
 		var n int
 
 		n, err = reader.Read(buf)
@@ -123,50 +225,50 @@ func (cc *Cashier) putEntry(c echo.Context) error {
 				break
 			}
 		} else if err != nil {
-			c.Logger().Warnf("upload %v: error reading %v", id, err)
+			log.Printf("upload %v: error reading %v", id, err)
 			break
 		}
 
-		c.Logger().Debugf("upload %v: read %v", id, n)
+		log.Printf("upload %v: read %v", id, n)
 
 		npos, err := cc.sdb.WriteAt(id, pos, buf[:n])
 		if err != nil {
-			c.Logger().Warnf("upload %v: error writing %v", id, err)
+			log.Printf("upload %v: error writing %v", id, err)
 			break
 		}
 
-		c.Logger().Debugf("upload %v: wrote %v, next %v", id, n, npos)
+		log.Printf("upload %v: wrote %v, next %v", id, n, npos)
 		nread += int64(n)
 		pos = npos
 	}
 	if nread != size {
-		c.Logger().Errorf("upload %v: expected %v read %v writepos %v", id, size, nread, pos)
+		log.Printf("upload %v: expected %v read %v writepos %v", id, size, nread, pos)
 	}
 	if err != nil {
-		c.Logger().Errorf("upload %v: %v", id, err.Error())
-		return c.String(http.StatusInternalServerError, err.Error())
+		log.Printf("upload %v: %v", id, err.Error())
+		return c.JSON(http.StatusInternalServerError, statusMessage("error", err.Error(), nil))
 	}
 
-	return c.String(http.StatusCreated, "CREATED")
+	return c.JSON(http.StatusCreated, statusMessage("success", "updated", nil))
 }
 
 func (cc *Cashier) deleteEntry(c echo.Context) error {
 	id := c.Param("id")
 	if err := cc.sdb.DeleteFile(id); err != nil {
-		return c.String(http.StatusInternalServerError, err.Error())
+		return c.JSON(http.StatusInternalServerError, statusMessage("error", err.Error(), nil))
 	}
 
-	return c.String(http.StatusNoContent, "DELETED")
+	return c.JSON(http.StatusCreated, statusMessage("success", "deleted", nil))
 }
 
 func (cc *Cashier) getMetadata(c echo.Context) error {
 	id := c.Param("id")
 	info, err := cc.sdb.Stat(id)
 	if err == storage.ErrNotFound {
-		return c.String(http.StatusNotFound, "NOT FOUND")
+		return c.JSON(http.StatusNotFound, statusMessage("missing", "not-found", nil))
 	}
 	if err != nil {
-		return c.String(http.StatusInternalServerError, err.Error())
+		return c.JSON(http.StatusInternalServerError, statusMessage("error", err.Error(), nil))
 	}
 
 	return c.JSON(http.StatusOK, info)
@@ -221,25 +323,22 @@ func (cc *Cashier) getEntry(c echo.Context) error {
 	id := c.Param("id")
 	info, err := cc.sdb.Stat(id)
 	if err == storage.ErrNotFound {
-		return c.String(http.StatusNotFound, "NOT FOUND")
+		return c.JSON(http.StatusNotFound, statusMessage("missing", "not-found", nil))
 	}
 	if err != nil {
-		return c.String(http.StatusInternalServerError, err.Error())
+		return c.JSON(http.StatusInternalServerError, statusMessage("error", err.Error(), nil))
 	}
 
 	if info.ContentType != "" {
 		c.Response().Header().Set("Content-Type", info.ContentType)
-
 	}
-
 	if info.Next != storage.FileComplete {
-		c.Response().Header().Set("X-Current-Length", strconv.Itoa(int(info.Next)))
-		c.Response().Header().Set("X-Total-Length", strconv.Itoa(int(info.Length)))
-		return c.String(http.StatusForbidden, "INCOMPLETE")
+		c.Response().Header().Set("Range",
+			fmt.Sprintf("bytes=%v-%v/%v", info.Next, info.Length-1, info.Length))
+		return c.JSON(http.StatusForbidden, statusMessage("not-ready", "incomplete", nil))
 	}
-
 	if info.Hash != "" {
-		c.Response().Header().Set("ETag", strconv.Quote(info.Hash))
+		c.Response().Header().Set("ETag", fmt.Sprintf("%q", info.Hash))
 	}
 
 	http.ServeContent(c.Response(), c.Request(), info.Name, info.Created, &ReadSeeker{sdb: cc.sdb, key: id, pos: 0, length: info.Length})
@@ -280,7 +379,8 @@ func main() {
 		return c.JSON(http.StatusOK, e.Routes())
 	}).Name = "Routes"
 
-	e.POST("/x/:id", cashier.putEntry).Name = "Create"
+	e.POST("/x/:id", cashier.createEntry).Name = "Create"
+	e.PUT("/x/:id", cashier.updateEntry).Name = "Update"
 	e.DELETE("/x/:id", cashier.deleteEntry).Name = "Delete"
 	e.GET("/x/:id", cashier.getEntry).Name = "Get"
 	e.HEAD("/x/:id", cashier.getEntry).Name = "Head"
