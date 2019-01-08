@@ -19,7 +19,7 @@ import (
 )
 
 type Cashier struct {
-	sdb *storage.StorageDB
+	sdb storage.StorageDB
 }
 
 type mmap = map[string]interface{}
@@ -275,7 +275,7 @@ func (cc *Cashier) getMetadata(c echo.Context) error {
 }
 
 type ReadSeeker struct {
-	sdb    *storage.StorageDB
+	sdb    storage.StorageDB
 	key    string
 	pos    int64
 	length int64
@@ -353,7 +353,7 @@ func main() {
 
 	flag.Parse()
 
-	sdb, err := storage.Open(*path, false, *ttl)
+	sdb, err := storage.OpenBadger(*path, false, *ttl)
 	if err != nil {
 		log.Fatal(err)
 	}

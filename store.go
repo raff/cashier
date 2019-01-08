@@ -28,7 +28,7 @@ func main() {
 	ppos := flag.Int64("pos", 0, "file position")
 	flag.Parse()
 
-	sdb, err := storage.Open(*path, *rdonly, *ttl)
+	sdb, err := storage.OpenBadger(*path, *rdonly, *ttl)
 	if err != nil {
 		fmt.Println(err)
 		return
