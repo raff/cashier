@@ -41,6 +41,7 @@ type StorageDB interface {
 	ReadAt(key string, buf []byte, pos int64) (int64, error)
 	Stat(key string) (*FileInfo, error)
 
+	GC() error
 	Scan(start string) error
 }
 
