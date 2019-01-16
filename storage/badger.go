@@ -347,7 +347,7 @@ func (s *badgerStorage) Scan(start string) error {
 			if item.ExpiresAt() == 0 {
 				log.Printf("%v: size=%v", string(item.Key()), item.EstimatedSize())
 			} else {
-				log.Printf("%v: size=%v exprires=%v deleted=%v",
+				log.Printf("%v: size=%v expires=%v deleted=%v",
 					string(item.Key()), item.EstimatedSize(),
 					time.Unix(int64(item.ExpiresAt()), 0), item.IsDeletedOrExpired())
 			}
