@@ -26,9 +26,18 @@ func main() {
 	del := flag.Bool("del", false, "delete file")
 	stat := flag.Bool("stat", false, "file info")
 	ppos := flag.Int64("pos", 0, "file position")
+	aws := flag.Bool("aws", false, "store data in AWS")
 	flag.Parse()
 
-	sdb, err := storage.OpenBadger(*path, *rdonly, *ttl)
+	var sdb storage.StorageDB
+	var err error
+
+	if *aws {
+		sdb, err = storage.OpenAWS(*path, *ttl)
+	} else {
+		sdb, err = storage.OpenBadger(*path, *rdonly, *ttl)
+	}
+
 	if err != nil {
 		fmt.Println(err)
 		return

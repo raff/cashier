@@ -19,8 +19,9 @@ const (
 	FileComplete int64 = -1
 	InvalidPos   int64 = -2
 
-	_INFO  = "%v:i"
-	_BLOCK = "%v:%d"
+	_PREFIX = "%v:"
+	_INFO   = "%v:i"
+	_BLOCK  = "%v:%d"
 )
 
 var (
@@ -47,13 +48,14 @@ type StorageDB interface {
 
 // file metadata
 type info struct {
-	Name        string    `json:"n"` // original file name
-	ContentType string    `json:"c"` //
-	Hash        string    `json:"h"` // original file hash
-	Length      int64     `json:"l"` // original file size
-	Created     time.Time `json:"t"` // creation time (time of completion)
-	CurPos      int64     `json:"p"` // current offset in file
-	CurHash     string    `json:"x"` // current hash
+	Name        string    `json:"n"`  // original file name
+	ContentType string    `json:"c"`  //
+	Hash        string    `json:"h"`  // original file hash
+	Length      int64     `json:"l"`  // original file size
+	Created     time.Time `json:"t"`  // creation time (time of completion)
+	CurPos      int64     `json:"p"`  // current offset in file
+	CurHash     string    `json:"x"`  // current hash
+	ExpiresAt   time.Time `json:omit` // this is stored separately
 }
 
 func (i *info) Marshal() ([]byte, error) {
@@ -62,6 +64,20 @@ func (i *info) Marshal() ([]byte, error) {
 
 func (i *info) Unmarshal(data []byte) error {
 	return json.Unmarshal(data, i)
+}
+
+func (i *info) MarshalString() (string, error) {
+	b, err := json.Marshal(i)
+	return string(b), err
+}
+
+func (i *info) UnmarshalString(data string) error {
+	err := i.Unmarshal([]byte(data))
+	if err != nil {
+		log.Printf("Unmarshal `%v`: %v", data, err)
+	}
+
+	return err
 }
 
 // User file info, returned by Stat
@@ -73,6 +89,15 @@ type FileInfo struct {
 	Next        int64
 	Created     time.Time
 	ExpiresAt   time.Time
+}
+
+func (f *FileInfo) String() string {
+	res, _ := json.Marshal(f)
+	return string(res)
+}
+
+func prefixKey(key string) string {
+	return fmt.Sprintf(_PREFIX, key)
 }
 
 func infoKey(key string) string {
