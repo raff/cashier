@@ -72,12 +72,7 @@ func (i *info) MarshalString() (string, error) {
 }
 
 func (i *info) UnmarshalString(data string) error {
-	err := i.Unmarshal([]byte(data))
-	if err != nil {
-		log.Printf("Unmarshal `%v`: %v", data, err)
-	}
-
-	return err
+	return i.Unmarshal([]byte(data))
 }
 
 // User file info, returned by Stat

@@ -121,7 +121,6 @@ func (s *awsStorage) upsertInfo(key string, value *info, create bool) error {
 	}).Send()
 
 	if err != nil {
-		log.Println("upsert", key, err)
 		if aerr, ok := err.(awserr.Error); ok {
 			if aerr.Code() == dynamodb.ErrCodeConditionalCheckFailedException {
 				return ErrExists
@@ -225,7 +224,6 @@ func (s *awsStorage) DeleteFile(key string) error {
 	}).Send()
 
 	// should check for list of Errors in DeleteObjectOutput
-
 	if err != nil {
 		log.Println("error deleting S3 %v: %v", ikey, err)
 	}
