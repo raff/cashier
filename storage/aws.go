@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"fmt"
+	"io"
 	"log"
 	"strconv"
 	"strings"
@@ -383,17 +384,23 @@ func (s *awsStorage) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 
 		rrange = ""
 
-		if aerr, ok := err.(awserr.Error); ok {
-			if aerr.Code() == s3.ErrCodeNoSuchKey {
-				return 0, ErrNotFound
-			}
+		if err != nil {
+			if aerr, ok := err.(awserr.Error); ok {
+				if aerr.Code() == s3.ErrCodeNoSuchKey {
+					return 0, ErrNotFound
+				}
 
-			return 0, err
+				return 0, err
+			}
 		}
 
 		n, err := res.Body.Read(buf[p:])
 		if err != nil {
-			return 0, err // if we read something, should we return it ?
+			if err == io.EOF && n == lbuf {
+				err = nil
+			} else {
+				return 0, err // if we read something, should we return it ?
+			}
 		}
 
 		res.Body.Close()
