@@ -373,6 +373,7 @@ func (s *awsStorage) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 		}
 	}
 
+	readn := BlockSize
 	for p := 0; lbuf > 0; block += 1 {
 		bkey := blockKey(key, int(block))
 
@@ -394,7 +395,11 @@ func (s *awsStorage) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 			}
 		}
 
-		n, err := res.Body.Read(buf[p:])
+		if readn > lbuf {
+			readn = lbuf
+		}
+
+		n, err := io.ReadAtLeast(res.Body, buf[p:], readn)
 		if err != nil {
 			if err == io.EOF && n == lbuf {
 				err = nil
