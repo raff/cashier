@@ -6,6 +6,7 @@ Files and data expire after a predefined TTL.
 package storage
 
 import (
+	"crypto/md5"
 	"encoding"
 	"encoding/json"
 	"fmt"
@@ -111,6 +112,10 @@ func fromHex(s string) []byte {
 	var b []byte
 	fmt.Sscanf(s, "%x", &b)
 	return b
+}
+
+func getHasher() hash.Hash {
+	return md5.New()
 }
 
 func marshalHash(h hash.Hash) (string, error) {

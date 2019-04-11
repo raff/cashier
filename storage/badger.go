@@ -6,7 +6,6 @@ Files and data expire after a predefined TTL.
 package storage
 
 import (
-	"crypto/md5"
 	"log"
 	"time"
 
@@ -171,7 +170,7 @@ func (s *badgerStorage) WriteAt(key string, pos int64, data []byte) (int64, erro
 		offs := int64(0)
 		ldata := len(data)
 
-		curHash := md5.New()
+		curHash := getHasher()
 		if err := unmarshalHash(curHash, fileInfo.CurHash); err != nil {
 			return err
 		}
