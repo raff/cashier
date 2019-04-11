@@ -6,13 +6,15 @@ Files and data expire after a predefined TTL.
 package storage
 
 import (
-	"crypto/md5"
 	"encoding"
 	"encoding/json"
 	"fmt"
 	"hash"
+	"io"
 	"log"
 	"time"
+
+	"github.com/raff/cashier/cumulative"
 )
 
 const (
@@ -115,7 +117,19 @@ func fromHex(s string) []byte {
 }
 
 func getHasher() hash.Hash {
-	return md5.New()
+	return cumulative.New() // md5.New()
+}
+
+func GetHash(r io.Reader) ([]byte, int64, error) {
+	var b [BlockSize]byte
+	hasher := getHasher()
+
+	sz, err := io.CopyBuffer(hasher, r, b[:])
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return hasher.Sum(nil), sz, nil
 }
 
 func marshalHash(h hash.Hash) (string, error) {

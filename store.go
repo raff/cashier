@@ -2,7 +2,6 @@
 package main
 
 import (
-	"crypto/md5"
 	"flag"
 	"fmt"
 	"io"
@@ -88,11 +87,9 @@ func main() {
 		defer f.Close()
 
 		ctype := "application/octet-stream"
-		hash := md5.New()
-
-		sz, err := io.Copy(hash, f)
+		hash, sz, err := storage.GetHash(f)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("calculating hash:", err)
 			return
 		}
 
@@ -103,7 +100,7 @@ func main() {
 				fmt.Println("create file", fname, ctype, sz)
 			}
 
-			if err := sdb.CreateFile(key, fname, ctype, sz, hash.Sum(nil)); err != nil {
+			if err := sdb.CreateFile(key, fname, ctype, sz, hash); err != nil {
 				fmt.Println(err)
 				return
 			}
