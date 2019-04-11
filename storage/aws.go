@@ -8,7 +8,7 @@ package storage
 
 import (
 	"bytes"
-	"crypto/md5"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/aws/aws-sdk-go-v2/aws/external"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/dynamodbattribute"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -55,7 +56,7 @@ func OpenAWS(dataFolder string, ttl time.Duration) (*awsStorage, error) {
 
 	_, err = db.DescribeTableRequest(&dynamodb.DescribeTableInput{
 		TableName: aws.String(bucket),
-	}).Send()
+	}).Send(context.TODO())
 
 	if err != nil {
 		return nil, err // table does not exist ?
@@ -65,7 +66,7 @@ func OpenAWS(dataFolder string, ttl time.Duration) (*awsStorage, error) {
 
 	_, err = store.GetBucketLocationRequest(&s3.GetBucketLocationInput{
 		Bucket: aws.String(prefix),
-	}).Send()
+	}).Send(context.TODO())
 
 	if err != nil {
 		return nil, err // table does not exist ?
@@ -119,7 +120,7 @@ func (s *awsStorage) upsertInfo(key string, value *info, create bool) error {
 		ReturnItemCollectionMetrics: dynamodb.ReturnItemCollectionMetricsNone,
 		ReturnValues:                dynamodb.ReturnValueNone,
 		TableName:                   aws.String(s.bucket),
-	}).Send()
+	}).Send(context.TODO())
 
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
@@ -144,7 +145,7 @@ func (s *awsStorage) getInfo(key string) (*info, error) {
 		},
 		ReturnConsumedCapacity: dynamodb.ReturnConsumedCapacityNone,
 		TableName:              aws.String(s.bucket),
-	}).Send()
+	}).Send(context.TODO())
 
 	if err != nil {
 		return nil, err
@@ -184,7 +185,7 @@ func (s *awsStorage) DeleteFile(key string) error {
 		ReturnItemCollectionMetrics: dynamodb.ReturnItemCollectionMetricsNone,
 		ReturnValues:                dynamodb.ReturnValueNone,
 		TableName:                   aws.String(s.bucket),
-	}).Send()
+	}).Send(context.TODO())
 	if err != nil {
 		return err
 	}
@@ -199,7 +200,7 @@ func (s *awsStorage) DeleteFile(key string) error {
 	var dels s3.Delete
 
 	p := req.Paginate()
-	for p.Next() {
+	for p.Next(context.TODO()) {
 		page := p.CurrentPage()
 
 		for _, obj := range page.Contents {
@@ -222,7 +223,7 @@ func (s *awsStorage) DeleteFile(key string) error {
 	_, err = s.store.DeleteObjectsRequest(&s3.DeleteObjectsInput{
 		Bucket: aws.String(s.bucket),
 		Delete: &dels,
-	}).Send()
+	}).Send(context.TODO())
 
 	// should check for list of Errors in DeleteObjectOutput
 	if err != nil {
@@ -283,7 +284,7 @@ func (s *awsStorage) WriteAt(key string, pos int64, data []byte) (int64, error) 
 	offs := int64(0)
 	ldata := len(data)
 
-	curHash := md5.New()
+	curHash := getHasher()
 	if err := unmarshalHash(curHash, fileInfo.CurHash); err != nil {
 		return InvalidPos, err
 	}
@@ -300,7 +301,7 @@ func (s *awsStorage) WriteAt(key string, pos int64, data []byte) (int64, error) 
 			Bucket:  aws.String(s.bucket),
 			Key:     aws.String(s.prefix + bkey),
 			Expires: aws.Time(time.Now().Add(s.ttl)),
-		}).Send()
+		}).Send(context.TODO())
 
 		if err != nil {
 			return InvalidPos, err
@@ -381,7 +382,7 @@ func (s *awsStorage) ReadAt(key string, buf []byte, pos int64) (int64, error) {
 			Bucket: aws.String(s.bucket),
 			Key:    aws.String(s.prefix + bkey),
 			Range:  aws.String(rrange),
-		}).Send()
+		}).Send(context.TODO())
 
 		rrange = ""
 
@@ -442,27 +443,53 @@ func (s *awsStorage) Stat(key string) (*FileInfo, error) {
 
 // Scan database, for debugging purposes
 func (s *awsStorage) Scan(start string) error {
-	/*
-		key := []byte(start)
+	dbReq := s.db.ScanRequest(&dynamodb.ScanInput{
+		TableName: aws.String(s.bucket),
+		Select:    dynamodb.SelectAllAttributes,
+	})
 
-		return s.db.View(func(txn *badger.Txn) error {
-			it := txn.NewIterator(badger.DefaultIteratorOptions)
-			defer it.Close()
+	dbPaginate := dbReq.Paginate()
 
-			for it.Seek(key); it.Valid(); it.Next() {
-				item := it.Item()
-				if item.ExpiresAt() == 0 {
-					log.Printf("%v: size=%v", string(item.Key()), item.EstimatedSize())
-				} else {
-					log.Printf("%v: size=%v expires=%v deleted=%v",
-						string(item.Key()), item.EstimatedSize(),
-						time.Unix(int64(item.ExpiresAt()), 0), item.IsDeletedOrExpired())
-				}
-			}
+	var records []struct {
+		Id    string
+		Value string
+		TTL   int64
+	}
 
-			return nil
-		})
-	*/
+	fmt.Println("Records:")
 
-	return nil
+	for dbPaginate.Next(context.TODO()) {
+		if err := dynamodbattribute.UnmarshalListOfMaps(dbPaginate.CurrentPage().Items, &records); err != nil {
+			log.Println("cannot unmarshal items:", err)
+			break
+		}
+
+		for _, r := range records {
+			fmt.Printf(" %s: size=%v expires=%v\n", r.Id, len(r.Value), time.Unix(r.TTL, 0))
+		}
+	}
+
+	err := dbPaginate.Err()
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Blocks:")
+
+	storeReq := s.store.ListObjectsV2Request(&s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(s.prefix),
+	})
+
+	storePaginate := storeReq.Paginate()
+	for storePaginate.Next(context.TODO()) {
+		for _, obj := range storePaginate.CurrentPage().Contents {
+			fmt.Printf(" %s: size=%v expires=%v\n",
+				aws.StringValue(obj.Key),
+				aws.Int64Value(obj.Size),
+				aws.TimeValue(obj.LastModified).Add(s.ttl))
+		}
+	}
+
+	return storePaginate.Err()
 }

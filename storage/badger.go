@@ -6,6 +6,7 @@ Files and data expire after a predefined TTL.
 package storage
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -344,9 +345,9 @@ func (s *badgerStorage) Scan(start string) error {
 		for it.Seek(key); it.Valid(); it.Next() {
 			item := it.Item()
 			if item.ExpiresAt() == 0 {
-				log.Printf("%v: size=%v", string(item.Key()), item.EstimatedSize())
+				fmt.Printf("%v: size=%v\n", string(item.Key()), item.EstimatedSize())
 			} else {
-				log.Printf("%v: size=%v expires=%v deleted=%v",
+				fmt.Printf("%v: size=%v expires=%v deleted=%v\n",
 					string(item.Key()), item.EstimatedSize(),
 					time.Unix(int64(item.ExpiresAt()), 0), item.IsDeletedOrExpired())
 			}
