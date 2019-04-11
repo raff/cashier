@@ -27,6 +27,7 @@ func main() {
 	stat := flag.Bool("stat", false, "file info")
 	ppos := flag.Int64("pos", 0, "file position")
 	aws := flag.Bool("aws", false, "store data in AWS")
+	verbose := flag.Bool("verbose", false, "log progress")
 	flag.Parse()
 
 	var sdb storage.StorageDB
@@ -98,6 +99,10 @@ func main() {
 		if *ppos == 0 {
 			// if ppos != 0, assume the file exists, but we didn't finish writing
 
+			if *verbose {
+				fmt.Println("create file", fname, ctype, sz)
+			}
+
 			if err := sdb.CreateFile(key, fname, ctype, sz, hash.Sum(nil)); err != nil {
 				fmt.Println(err)
 				return
@@ -121,7 +126,9 @@ func main() {
 				return
 			}
 
-			// fmt.Println(key, sz, pos)
+			if *verbose {
+				fmt.Println("write", key, sz, pos)
+			}
 
 			npos, err := sdb.WriteAt(key, pos, buf[:n])
 			if err != nil {
@@ -184,6 +191,10 @@ func main() {
 		var pos int64
 
 		for pos < stat.Length {
+			if *verbose {
+				fmt.Println("read", key, pos)
+			}
+
 			n, err := sdb.ReadAt(key, buf, pos)
 			if err != nil {
 				fmt.Println(err)
