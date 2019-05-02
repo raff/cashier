@@ -5,7 +5,7 @@ Cashier is a caching layer for "conversion services"
 
 - store files in a common storage service, with TTL
   + BadgerDB (DONE)
-  + S3 (TODO)
+  + S3 + DynamoDB (DONE)
   + Other cloud stores (TODO)
 
 - Support resumable uploads
