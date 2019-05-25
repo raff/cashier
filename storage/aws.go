@@ -27,8 +27,8 @@ import (
 // An instance of the Storage service based on AWS S3
 
 type awsStorage struct {
-	db     *dynamodb.DynamoDB
-	store  *s3.S3
+	db     *dynamodb.Client
+	store  *s3.Client
 	bucket string // bucket is also used as the table name in DynamoDB
 	prefix string
 	ttl    time.Duration
@@ -199,7 +199,8 @@ func (s *awsStorage) DeleteFile(key string) error {
 
 	var dels s3.Delete
 
-	p := req.Paginate()
+	p := s3.NewListObjectsV2Paginator(req)
+
 	for p.Next(context.TODO()) {
 		page := p.CurrentPage()
 
@@ -448,7 +449,7 @@ func (s *awsStorage) Scan(start string) error {
 		Select:    dynamodb.SelectAllAttributes,
 	})
 
-	dbPaginate := dbReq.Paginate()
+	dbPaginate := dynamodb.NewScanPaginator(dbReq)
 
 	var records []struct {
 		Id    string
@@ -481,7 +482,8 @@ func (s *awsStorage) Scan(start string) error {
 		Prefix: aws.String(s.prefix),
 	})
 
-	storePaginate := storeReq.Paginate()
+	storePaginate := s3.NewListObjectsV2Paginator(storeReq)
+
 	for storePaginate.Next(context.TODO()) {
 		for _, obj := range storePaginate.CurrentPage().Contents {
 			fmt.Printf(" %s: size=%v expires=%v\n",
